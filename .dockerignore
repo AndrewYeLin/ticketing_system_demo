@@ -1,0 +1,27 @@
+.git
+.gitignore
+node_modules
+.env
+.env.*
+*.log
+npm-debug.log*
+.DS_Store
+
+# Local agent configuration and test/scratch output must never enter the image.
+.claude/
+.e2e-fixtures/
+.e2e-multiprocess-uploads/
+tmp/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+test/
+
+# Don't bake operational data into the image (it lives on the host volume).
+data/*.csv
+data/*.json
+uploads/
+staging/
+uat-uploads*/
+uat-staging*/

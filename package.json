@@ -1,0 +1,19 @@
+{
+  "name": "comp6708-ticketing-demo",
+  "version": "0.1.0",
+  "description": "COMP6708 Group 19 academic prototype: conversational finance request tracker.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:dev": "node scripts/run-profile.js local server.js",
+    "start:demo": "node scripts/bootstrap-demo-admin.js && node server.js",
+    "test": "node --test",
+    "test:watch": "node --test --watch"
+  },
+  "license": "MIT",
+  "private": true,
+  "dependencies": {
+    "mssql": "^12.7.0",
+    "nodemailer": "^9.0.5"
+  }
+}

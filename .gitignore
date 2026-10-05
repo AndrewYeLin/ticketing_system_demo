@@ -1,0 +1,56 @@
+# Generated data (the operational register lives in a shared folder, not the repo)
+data/*.csv
+data/*.csv.tmp
+data/*.json
+data/*.tmp
+data/*.bak-*
+data/migration_report.json
+data/retired_status_migration_report.json
+# Local copies of reference lists retired into the people directory.
+data/_retired/
+# ...but keep the editable reference lists in the repo
+!data/cost_codes.csv
+!data/activity_codes.csv
+# people.csv is local CSV-backend runtime data and may contain private requester emails.
+# Production uses SQL, so keep it on the developer machine instead of the repository.
+data/people.csv
+
+node_modules/
+*.log
+.DS_Store
+
+# Secrets / local config (DB connection). Never commit.
+.env
+.env.*
+!.env.example
+!.env.local.example
+!.env.sql-test.example
+!.env.production.example
+!.env.uat.example
+
+# Uploaded attachment files (bytes live on disk, metadata in the store).
+uploads/
+staging/
+
+# Local agent configuration, skills, launch settings and session files.
+.claude/
+
+# Local test fixtures and generated scratch/export files.
+.e2e-fixtures/
+.e2e-multiprocess-uploads/
+tmp/
+coverage/
+.nyc_output/
+test-results/
+playwright-report/
+
+# Local agent/design/history documents. These are not required by the running service and
+# should stay out of the shared repository. Keep README.md tracked as the deployment runbook.
+AGENTS.md
+CLAUDE.md
+TESTING_SKILL.md
+DESIGN.md
+finance-request-tracker-mvp.md
+
+# COMP6708 demo runtime persistence
+persist/

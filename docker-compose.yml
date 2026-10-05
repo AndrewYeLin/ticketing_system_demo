@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      DEMO_MODE: "true"
+      STORAGE: csv
+      NODE_ENV: production
+      TZ: Asia/Hong_Kong
+      DATA_DIR: /app/persist/data
+      UPLOAD_DIR: /app/persist/uploads
+      STAGING_DIR: /app/persist/staging
+    volumes:
+      - ./persist:/app/persist
