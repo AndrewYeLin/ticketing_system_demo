@@ -9,8 +9,8 @@ Academic prototype for COMP6708. This repository is a sanitised course-demo copy
 - File attachments
 - Local authentication and role-based access
 - CSV storage for a low-cost, single-instance course demo
-- REST APIs that can later be exposed as MCP tools
-- Planned chat layer for Assignment 2/3 work on textual turn-taking, RAG and MCP
+- REST APIs plus a standalone MCP read-only tool server
+- Logged-in Course Assistant with training-free turn-taking and lexical RAG fallback
 
 ## Local run
 
@@ -34,11 +34,17 @@ Required variables:
 
 After Railway creates the public domain, optionally set APP_BASE_URL to that HTTPS URL.
 
-## Assignment 3 direction
+## Assignment 3 foundation
 
-The existing REST API is intentionally retained so the next layer can add:
-1. Turn-taking logic — decide whether to respond now or wait for more user messages.
-2. RAG — answer finance/policy questions from a small demo knowledge base.
-3. MCP — expose tools such as get_request, create_request, submit_request, and get_request_history.
+The repository now includes:
+
+1. **Turn-taking** — `/api/assistant/turn` decides `WAIT` or `RESPOND` for text message bursts using a training-free heuristic baseline.
+2. **RAG** — `lib/knowledgeBase.js` retrieves evidence from synthetic markdown under `knowledge/`.
+3. **Course Assistant UI** — a logged-in floating chat panel demonstrates multi-message waiting, RAG answers and live synthetic request-status lookup.
+4. **MCP** — `npm run mcp` starts a genuine standalone MCP stdio server with read-only knowledge and ticket tools.
+
+See `docs/ASSIGNMENT3_ARCHITECTURE.md` for the architecture, demo flow and later LLM integration points.
+
+The current web assistant deliberately works without an external LLM. When a provider is selected, add the API key only through local/Railway environment variables.
 
 Do not place real university operational data, credentials, supplier bank information or real tickets in this course repository.

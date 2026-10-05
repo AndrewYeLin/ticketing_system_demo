@@ -7,13 +7,16 @@
     "start": "node server.js",
     "start:dev": "node scripts/run-profile.js local server.js",
     "start:demo": "node scripts/bootstrap-demo-admin.js && node server.js",
+    "mcp": "node mcp/server.mjs",
     "test": "node --test",
     "test:watch": "node --test --watch"
   },
   "license": "MIT",
   "private": true,
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "mssql": "^12.7.0",
-    "nodemailer": "^9.0.5"
+    "nodemailer": "^10.0.9",
+    "zod": "^4.6.5"
   }
 }

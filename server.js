@@ -21,6 +21,8 @@ const crypto = require('crypto');
 const store = require('./lib/store');
 const { StagingQueue } = require('./lib/stagingQueue');
 const auth = require('./lib/auth');
+const { searchFinanceKnowledge } = require('./lib/knowledgeBase');
+const { decideTurn } = require('./lib/turnTaking');
 const {
   REQUEST_TYPES,
   STATUSES,
@@ -874,6 +876,90 @@ async function handleApi(req, res, parsed) {
   if (pathname === '/api/me' && method === 'GET') {
     return sendJson(res, 200, { username: req.user.username, role: req.user.role, person_id: req.user.person_id || '', display_name: req.user.display_name });
   }
+
+  // ---- COMP6708 conversational assistant (training-free fallback) ----
+  if (pathname === '/api/assistant/knowledge') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    const query = String((parsed.query && parsed.query.q) || '').trim();
+    if (query.length < 2) return sendJson(res, 400, { error: 'q must contain at least 2 characters' });
+    return sendJson(res, 200, {
+      disclaimer: 'Synthetic academic demo content; not official PolyU policy.',
+      results: searchFinanceKnowledge(query, { limit: 4 }),
+    });
+  }
+
+  if (pathname === '/api/assistant/turn') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    const body = await readBody(req, res);
+    return sendJson(res, 200, decideTurn(body));
+  }
+
+  if (pathname === '/api/assistant/respond') {
+    if (method !== 'POST') return methodNotAllowed(['POST']);
+    const body = await readBody(req, res);
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    const userTexts = messages
+      .filter((message) => !message || message.role !== 'assistant')
+      .map((message) => String(message && (message.text || message.content) || '').trim())
+      .filter(Boolean);
+    const query = userTexts.join(' ').trim();
+    if (!query) return sendJson(res, 400, { error: 'At least one user message is required' });
+
+    const requestIdMatch = query.match(/\bFR-\d{8}-\d{3}\b/i);
+    if (requestIdMatch) {
+      const requestId = requestIdMatch[0].toUpperCase();
+      const row = await store.getRequestById(requestId);
+      if (!row || String(row.deleted || '') === 'Yes' || (!isAdmin(req) && !(await owns(req, row)))) {
+        return sendJson(res, 200, {
+          mode: 'deterministic-demo',
+          text: `I could not find ${requestId} among the requests this signed-in account can access.`,
+          sources: [],
+        });
+      }
+      const details = [
+        `Request ${requestId}`,
+        row.request_type ? `type: ${row.request_type}` : '',
+        row.sub_type ? `subtype: ${row.sub_type}` : '',
+        row.current_status ? `status: ${statusLabel(row.current_status)}` : '',
+        row.waiting_on ? `waiting on: ${userFacingLabel(row.waiting_on)}` : '',
+        row.next_action ? `next action: ${userFacingLabel(row.next_action)}` : '',
+      ].filter(Boolean);
+
+      if (/\bhistory\b|\bchanged\b|\bupdate\b/i.test(query)) {
+        const history = await store.getRequestHistory(requestId);
+        const latest = history.slice(-3).map((event) => {
+          const when = event.changed_at || event.timestamp || '';
+          const what = event.event_type || event.event || event.status || 'Update';
+          return `${when ? `${when}: ` : ''}${what}`;
+        });
+        if (latest.length) details.push(`recent history: ${latest.join(' | ')}`);
+      }
+
+      return sendJson(res, 200, {
+        mode: 'deterministic-demo',
+        text: `${details.join('; ')}. This status comes from the live synthetic tracker, not from policy text.`,
+        sources: [],
+      });
+    }
+
+    const hits = searchFinanceKnowledge(query, { limit: 3 });
+    if (!hits.length || hits[0].score < 2) {
+      return sendJson(res, 200, {
+        mode: 'deterministic-demo',
+        text: 'I do not have enough evidence in the synthetic course-demo knowledge base to answer that safely. Try asking about reimbursement, procurement, travel allowance, supporting documents, request workflow, or an FR request ID.',
+        sources: [],
+      });
+    }
+
+    const selected = hits.slice(0, 2);
+    const evidenceText = selected.map((hit) => `${hit.section}: ${hit.text}`).join('\n\n');
+    return sendJson(res, 200, {
+      mode: 'deterministic-demo',
+      text: `Based only on the synthetic COMP6708 knowledge base:\n\n${evidenceText}\n\nThis is academic demo guidance, not official PolyU policy.`,
+      sources: selected.map((hit) => ({ file: hit.file, title: hit.title, section: hit.section, score: hit.score })),
+    });
+  }
+
 
   if (pathname === '/api/staging' && method === 'GET') {
     return sendJson(res, 200, { items: await stagingQueue.statusesForActor(actorSnapshot(req)) });
