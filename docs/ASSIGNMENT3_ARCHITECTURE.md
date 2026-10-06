@@ -11,79 +11,106 @@ User
 Chat UI
   |
   v
-Turn-taking controller -----> WAIT / RESPOND
+Hybrid turn-taking controller
+  |-- local burst/max-wait guardrails
+  |-- OpenAI semantic EOT -> WAIT / RESPOND
   |
   v
-Assistant orchestration
-  |                     \
-  v                      v
-RAG knowledge          MCP tools
-(synthetic docs)       (tracker data/actions)
-  \                      /
-   \                    /
-    v                  v
-      Finance Request Tracker
+OpenAI Responses API
+  |                         \
+  v                          v
+RAG evidence              Remote MCP
+(synthetic docs)          (read-only tracker tools)
+  \                         /
+   \                       /
+    v                     v
+      Grounded assistant response
 ```
 
 The design separates three concerns:
 
-- **Turn-taking = WHEN** the assistant should speak. It reduces premature replies during multi-message user bursts.
-- **RAG = KNOWLEDGE** the assistant is allowed to use. The current retriever searches only synthetic course-demo markdown files.
-- **MCP = ACTION / DATA** the assistant can access in the tracker. The first MCP server is intentionally read-only.
+- **Turn-taking = WHEN** the assistant should speak.
+- **RAG = KNOWLEDGE** the assistant is allowed to use for finance/process guidance.
+- **MCP = ACTION / DATA** the model can read from the synthetic tracker through explicit tools.
 
-## Current training-free fallback
+## Turn-taking
 
-No external LLM is required to run the app.
+`/api/assistant/turn` first computes the original deterministic baseline. Hard guardrails remain local: a forced response and the maximum-wait limit never depend on the model. Fresh ordinary fragments stay inside the local message-burst window to reduce latency and API cost.
 
-The browser sends each user message to `/api/assistant/turn`. A deterministic controller uses question signals, explicit turn-yield phrases, continuation cues, short fragments, an inactivity window, and a maximum wait. The result is `WAIT` or `RESPOND`.
+After the burst window, when OpenAI is configured, `gpt-6-luna` performs semantic end-of-turn classification and returns only `WAIT` or `RESPOND`. If the API is unavailable, the deterministic baseline is returned instead.
 
-When the system responds, `/api/assistant/respond` either reads an accessible request ID such as `FR-20261005-001`, or retrieves relevant passages from the synthetic knowledge base.
-
-This is deliberately a baseline. Assignment 2 can compare such rules with LLM-based end-of-turn prediction.
+This makes the rule-based controller a genuine Assignment 2 comparison baseline rather than dead code.
 
 ## RAG
 
-`lib/knowledgeBase.js` loads and chunks markdown from `knowledge/`, tokenises the query and ranks chunks lexically. No embeddings or external model are used yet.
+`lib/knowledgeBase.js` chunks and ranks the synthetic markdown in `knowledge/`. The selected passages are then supplied to the chat model. The model is instructed not to invent policy facts outside those passages.
 
-Later LLM flow:
+Current flow:
 
 ```text
-question -> retrieve top chunks -> prompt LLM with chunks -> cited answer
+user burst -> lexical retrieval -> evidence passages -> OpenAI grounded synthesis
 ```
+
+The UI shows the retrieved synthetic source headings.
 
 ## MCP
 
-Run the standalone MCP server with:
+Two MCP transports are available:
 
-```bash
-npm run mcp
-```
+- `npm run mcp`: standalone stdio server for local MCP clients.
+- `/mcp`: bearer-protected Streamable HTTP MCP endpoint used by the OpenAI Responses API.
 
-Initial read-only tools:
+The remote endpoint exposes read-only, deliberately projected demo tools:
 
 - `search_finance_knowledge`
-- `list_requests`
-- `get_request`
-- `get_request_history`
+- `list_demo_requests`
+- `get_demo_request`
+- `get_demo_request_history`
 
-Knowledge search works without credentials. Ticket tools require `APP_BASE_URL`, `MCP_DEMO_EMAIL`, and `MCP_DEMO_PASSWORD`.
+The remote tools omit requester identity, supplier banking data, attachment metadata, and private internal-note text. The endpoint requires `MCP_SERVER_TOKEN`; the same token is sent to it by the server-side OpenAI request. It is never exposed to the browser.
 
-Write tools are intentionally deferred. They should require explicit confirmation and authorization checks.
+Write tools remain deferred. A future `create_request_draft` or `submit_request` must add explicit user confirmation and authorization checks.
 
-## Future LLM integration
+## OpenAI integration
 
-The current deployment can run with `LLM_PROVIDER=none`. When a provider is chosen, add a server-side provider adapter for semantic EOT classification, grounded RAG answer generation, MCP tool selection, and streaming/cancellation. Keep API keys only in environment variables.
+The implementation uses the Responses API. Server-side configuration:
+
+```text
+LLM_PROVIDER=openai
+OPENAI_API_MODE=responses
+OPENAI_API_KEY=<secret>
+OPENAI_TURN_MODEL=gpt-6-luna
+OPENAI_CHAT_MODEL=gpt-6.1-sol
+APP_BASE_URL=https://<railway-domain>
+MCP_SERVER_TOKEN=<random-secret>
+```
+
+No OpenAI credential is sent to browser JavaScript.
+
+## Failure behaviour
+
+The app is intentionally demo-resilient:
+
+1. OpenAI semantic EOT failure -> heuristic WAIT/RESPOND baseline.
+2. OpenAI answer/MCP failure -> deterministic RAG or local tracker fallback.
+3. Missing MCP configuration -> the model can still answer grounded RAG questions, but cannot use remote tracker tools.
 
 ## Suggested 5-minute demo
 
-1. Sign in to the deployed tracker.
-2. Open **Course Assistant**.
-3. Send a burst: “I need a reimbursement” / “Uber from the airport” / “$46.80” / “and I have two receipts”.
-4. Show WAIT behaviour rather than a reply after every fragment.
-5. Ask “What documents do I need for reimbursement?” and show synthetic RAG evidence.
-6. Ask for the status of an accessible synthetic FR request ID.
-7. Explain the MCP tools and future LLM provider adapter.
+1. Sign in and open **Course Assistant**.
+2. Send a burst: “I need a reimbursement” / “Uber from the airport” / “$46.80” / “and I have two receipts”.
+3. Show WAIT behaviour and explain local burst control plus semantic EOT.
+4. Ask “What documents do I need for reimbursement?” and show the synthetic RAG source labels.
+5. Ask for the status of a synthetic `FR-YYYYMMDD-NNN` request and show **MCP tools used** in the chat panel.
+6. Briefly explain the fallback path and that no fine-tuning is used.
 
 ## Evaluation ideas
 
-Prepare 15–20 labelled scenarios and report end-of-turn accuracy/F1, premature response rate, added response latency, and interruption/correction recovery.
+Prepare 15–20 labelled scenarios and compare the heuristic baseline with semantic EOT on:
+
+- end-of-turn accuracy/F1;
+- premature response rate;
+- added response latency;
+- interruption/correction recovery.
+
+The central trade-off is responsiveness versus premature interruption.

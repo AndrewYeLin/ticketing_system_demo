@@ -10,7 +10,7 @@ Academic prototype for COMP6708. This repository is a sanitised course-demo copy
 - Local authentication and role-based access
 - CSV storage for a low-cost, single-instance course demo
 - REST APIs plus a standalone MCP read-only tool server
-- Logged-in Course Assistant with training-free turn-taking and lexical RAG fallback
+- Logged-in Course Assistant with OpenAI semantic turn-taking, grounded RAG, remote MCP tools, and deterministic fallback
 
 ## Local run
 
@@ -38,13 +38,14 @@ After Railway creates the public domain, optionally set APP_BASE_URL to that HTT
 
 The repository now includes:
 
-1. **Turn-taking** — `/api/assistant/turn` decides `WAIT` or `RESPOND` for text message bursts using a training-free heuristic baseline.
-2. **RAG** — `lib/knowledgeBase.js` retrieves evidence from synthetic markdown under `knowledge/`.
-3. **Course Assistant UI** — a logged-in floating chat panel demonstrates multi-message waiting, RAG answers and live synthetic request-status lookup.
-4. **MCP** — `npm run mcp` starts a genuine standalone MCP stdio server with read-only knowledge and ticket tools.
+1. **Turn-taking** — a deterministic burst/maximum-wait baseline is augmented by OpenAI semantic end-of-turn classification.
+2. **RAG** — `lib/knowledgeBase.js` retrieves evidence from synthetic markdown; the chat model may synthesise an answer only from that evidence.
+3. **Course Assistant UI** — a logged-in floating chat panel shows WAIT/RESPOND behaviour, RAG sources, and MCP tools used.
+4. **MCP** — `/mcp` is a bearer-protected Streamable HTTP MCP endpoint for read-only synthetic tracker tools; `npm run mcp` remains available for stdio clients.
+5. **Fallback** — if OpenAI is unavailable, the original deterministic turn-taking and response paths still work.
 
-See `docs/ASSIGNMENT3_ARCHITECTURE.md` for the architecture, demo flow and later LLM integration points.
+See `docs/ASSIGNMENT3_ARCHITECTURE.md` for architecture, demo flow, environment variables, and safety boundaries.
 
-The current web assistant deliberately works without an external LLM. When a provider is selected, add the API key only through local/Railway environment variables.
+OpenAI secrets and the MCP bearer token belong only in local/Railway environment variables and must never be committed.
 
 Do not place real university operational data, credentials, supplier bank information or real tickets in this course repository.

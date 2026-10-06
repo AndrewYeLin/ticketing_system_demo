@@ -23,6 +23,9 @@ const { StagingQueue } = require('./lib/stagingQueue');
 const auth = require('./lib/auth');
 const { searchFinanceKnowledge } = require('./lib/knowledgeBase');
 const { decideTurn } = require('./lib/turnTaking');
+const openaiAssistant = require('./lib/openaiAssistant');
+const { createDemoMcpHttpServer } = require('./mcp/httpServer');
+const demoMcpHttp = createDemoMcpHttpServer();
 const {
   REQUEST_TYPES,
   STATUSES,
@@ -877,7 +880,18 @@ async function handleApi(req, res, parsed) {
     return sendJson(res, 200, { username: req.user.username, role: req.user.role, person_id: req.user.person_id || '', display_name: req.user.display_name });
   }
 
-  // ---- COMP6708 conversational assistant (training-free fallback) ----
+  // ---- COMP6708 conversational assistant: heuristic baseline + OpenAI semantic layer ----
+  if (pathname === '/api/assistant/config') {
+    if (method !== 'GET') return methodNotAllowed(['GET']);
+    return sendJson(res, 200, {
+      provider: openaiAssistant.configured() ? 'openai' : 'heuristic',
+      api_mode: process.env.OPENAI_API_MODE || 'responses',
+      turn_model: process.env.OPENAI_TURN_MODEL || openaiAssistant.DEFAULT_TURN_MODEL,
+      chat_model: process.env.OPENAI_CHAT_MODEL || openaiAssistant.DEFAULT_CHAT_MODEL,
+      mcp_enabled: !!(String(process.env.APP_BASE_URL || '').trim() && String(process.env.MCP_SERVER_TOKEN || '').trim()),
+    });
+  }
+
   if (pathname === '/api/assistant/knowledge') {
     if (method !== 'GET') return methodNotAllowed(['GET']);
     const query = String((parsed.query && parsed.query.q) || '').trim();
@@ -891,7 +905,9 @@ async function handleApi(req, res, parsed) {
   if (pathname === '/api/assistant/turn') {
     if (method !== 'POST') return methodNotAllowed(['POST']);
     const body = await readBody(req, res);
-    return sendJson(res, 200, decideTurn(body));
+    const heuristic = decideTurn(body);
+    const decision = await openaiAssistant.classifyTurn(body, heuristic);
+    return sendJson(res, 200, decision);
   }
 
   if (pathname === '/api/assistant/respond') {
@@ -905,6 +921,30 @@ async function handleApi(req, res, parsed) {
     const query = userTexts.join(' ').trim();
     if (!query) return sendJson(res, 400, { error: 'At least one user message is required' });
 
+    const hits = searchFinanceKnowledge(query, { limit: 4 });
+    if (openaiAssistant.configured()) {
+      try {
+        const generated = await openaiAssistant.generateGroundedAnswer({ messages, evidence: hits });
+        if (generated) {
+          return sendJson(res, 200, {
+            ...generated,
+            sources: hits.slice(0, 3).map((hit) => ({
+              file: hit.file,
+              title: hit.title,
+              section: hit.section,
+              score: hit.score,
+            })),
+          });
+        }
+      } catch (err) {
+        // The course demo remains usable when an API quota/network/model issue occurs.
+        // Never include the API error itself in the client response because it may contain
+        // provider metadata that is irrelevant to the user.
+        console.warn('OpenAI assistant unavailable; using deterministic fallback:', err && err.message || 'unknown error');
+      }
+    }
+
+    // Deterministic fallback and Assignment 2 baseline.
     const requestIdMatch = query.match(/\bFR-\d{8}-\d{3}\b/i);
     if (requestIdMatch) {
       const requestId = requestIdMatch[0].toUpperCase();
@@ -942,7 +982,6 @@ async function handleApi(req, res, parsed) {
       });
     }
 
-    const hits = searchFinanceKnowledge(query, { limit: 3 });
     if (!hits.length || hits[0].score < 2) {
       return sendJson(res, 200, {
         mode: 'deterministic-demo',
@@ -1495,7 +1534,10 @@ const server = http.createServer(async (req, res) => {
   const requestUrl = new URL(req.url, 'http://localhost');
   const parsed = { pathname: requestUrl.pathname, query: Object.fromEntries(requestUrl.searchParams) };
   try {
-    if (parsed.pathname.startsWith('/api/')) {
+    if (parsed.pathname === '/mcp') {
+      const body = req.method === 'POST' ? await readBody(req, res) : undefined;
+      if (!res.writableEnded) await demoMcpHttp.handle(req, res, body);
+    } else if (parsed.pathname.startsWith('/api/')) {
       // Only the API needs an identity, and resolving one now costs a storage read —
       // no reason to pay it for every stylesheet.
       req.user = await resolveSession(req);

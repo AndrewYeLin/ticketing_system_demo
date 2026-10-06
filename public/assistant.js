@@ -2,7 +2,7 @@
 
 (() => {
   const byId = (id) => document.getElementById(id);
-  const model = { messages: [], lastResponded: 0, timer: null, busy: false };
+  const model = { messages: [], lastResponded: 0, timer: null, busy: false, config: null };
   let wired = false;
 
   async function request(path, options = {}) {
@@ -22,7 +22,7 @@
     if (!value) panel.hidden = true;
   }
 
-  function renderMessage(role, text, sources = []) {
+  function renderMessage(role, text, sources = [], tools = []) {
     const list = byId('assistant-messages');
     const item = document.createElement('div');
     item.className = `assistant-message assistant-message-${role}`;
@@ -33,8 +33,14 @@
     if (Array.isArray(sources) && sources.length) {
       const cite = document.createElement('div');
       cite.className = 'assistant-sources';
-      cite.textContent = `Synthetic sources: ${sources.map((source) => `${source.title} — ${source.section}`).join('; ')}`;
+      cite.textContent = `Synthetic RAG: ${sources.map((source) => `${source.title} — ${source.section}`).join('; ')}`;
       item.appendChild(cite);
+    }
+    if (Array.isArray(tools) && tools.length) {
+      const toolLine = document.createElement('div');
+      toolLine.className = 'assistant-sources';
+      toolLine.textContent = `MCP tools used: ${tools.join(', ')}`;
+      item.appendChild(toolLine);
     }
     list.appendChild(item);
     list.scrollTop = list.scrollHeight;
@@ -53,11 +59,21 @@
     model.timer = null;
   }
 
+  function readyStatus() {
+    if (model.config && model.config.provider === 'openai') {
+      const mcp = model.config.mcp_enabled ? ' · MCP ready' : '';
+      return `OpenAI · ${model.config.chat_model}${mcp}`;
+    }
+    return 'Heuristic/RAG fallback mode';
+  }
+
   async function getResponse() {
     if (model.busy || !pendingMessages().some((message) => message.role === 'user')) return;
     clearTimer();
     model.busy = true;
-    setStatus('Preparing deterministic demo response…', 'working');
+    setStatus(model.config && model.config.provider === 'openai'
+      ? 'Generating grounded OpenAI response…'
+      : 'Preparing deterministic demo response…', 'working');
     try {
       const data = await request('/api/assistant/respond', {
         method: 'POST',
@@ -65,8 +81,14 @@
       });
       model.messages.push({ role: 'assistant', text: data.text, at: Date.now() });
       model.lastResponded = model.messages.length;
-      renderMessage('assistant', data.text, data.sources || []);
-      setStatus('Fallback mode · no external LLM connected', 'ready');
+      renderMessage('assistant', data.text, data.sources || [], data.tools_used || []);
+      if (data.mode === 'openai-rag-mcp') {
+        setStatus(`OpenAI ${data.model} · RAG + MCP`, 'ready');
+      } else if (data.mode === 'openai-rag') {
+        setStatus(`OpenAI ${data.model} · grounded RAG`, 'ready');
+      } else {
+        setStatus('Deterministic fallback response', 'ready');
+      }
     } catch (err) {
       renderMessage('assistant', `I could not complete that demo response: ${err.message}`);
       setStatus('Assistant error', 'error');
@@ -88,7 +110,8 @@
         body: JSON.stringify({ messages: burst, elapsed_ms: elapsed, force }),
       });
       if (decision.decision === 'RESPOND') return getResponse();
-      setStatus(`Listening for more… (${decision.reason})`, 'waiting');
+      const source = decision.provider === 'openai' ? 'OpenAI semantic EOT' : 'turn baseline';
+      setStatus(`Listening for more… (${source}: WAIT)`, 'waiting');
       clearTimer();
       model.timer = setTimeout(() => evaluateTurn(false), Math.max(300, Math.min(1000, decision.idle_ms || 1200)));
     } catch (err) {
@@ -102,6 +125,16 @@
     renderMessage('user', text);
     clearTimer();
     evaluateTurn(false);
+  }
+
+  async function loadConfig() {
+    try {
+      model.config = await request('/api/assistant/config');
+      setStatus(readyStatus(), 'ready');
+    } catch (_) {
+      model.config = null;
+      setStatus('Assistant ready', 'ready');
+    }
   }
 
   function wire() {
@@ -136,11 +169,16 @@
       }
     });
 
-    const sync = () => setAuthenticated(!appMain.hidden);
+    let wasAuthenticated = false;
+    const sync = () => {
+      const authenticated = !appMain.hidden;
+      setAuthenticated(authenticated);
+      if (authenticated && !wasAuthenticated) loadConfig();
+      wasAuthenticated = authenticated;
+    };
     new MutationObserver(sync).observe(appMain, { attributes: true, attributeFilter: ['hidden'] });
     sync();
-    setStatus('Fallback mode · no external LLM connected', 'ready');
-    renderMessage('assistant', 'Course-demo assistant ready. Send several short messages to see turn-taking, ask a synthetic finance-process question, or ask about an accessible FR request ID.');
+    renderMessage('assistant', 'Course-demo assistant ready. Send several short messages to test semantic turn-taking, ask a synthetic finance-process question for RAG, or ask about an FR request ID to exercise MCP.');
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wire);
