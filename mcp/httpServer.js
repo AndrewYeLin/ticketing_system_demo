@@ -1,17 +1,12 @@
 'use strict';
 
-const crypto = require('crypto');
 const { McpServer } = require('@modelcontextprotocol/sdk/server/mcp.js');
 const { StreamableHTTPServerTransport } = require('@modelcontextprotocol/sdk/server/streamableHttp.js');
 const { z } = require('zod');
 const store = require('../lib/store');
 const { searchFinanceKnowledge } = require('../lib/knowledgeBase');
-
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a || ''));
-  const right = Buffer.from(String(b || ''));
-  return left.length === right.length && left.length > 0 && crypto.timingSafeEqual(left, right);
-}
+const { TERMINAL_STATUSES } = require('../lib/constants');
+const { safeEqual, verifyActorHeaders } = require('../lib/mcpActorAuth');
 
 function safeRequest(row) {
   if (!row || String(row.deleted || '') === 'Yes') return null;
@@ -35,10 +30,10 @@ function safeRequest(row) {
 function safeHistory(event) {
   if (!event || event.event_type === 'Internal Note') return null;
   return {
-    changed_at: event.changed_at || event.timestamp || '',
+    changed_at: event.changed_at || event.timestamp || event.event_time || '',
     event_type: event.event_type || event.event || '',
-    from_status: event.from_status || '',
-    to_status: event.to_status || event.status || '',
+    from_status: event.from_status || event.old_status || '',
+    to_status: event.to_status || event.new_status || event.status || '',
     changed_by: event.changed_by || event.changed_by_username || '',
   };
 }
@@ -52,8 +47,86 @@ function asText(value) {
   };
 }
 
-function buildServer() {
-  const server = new McpServer({ name: 'comp6708-finance-demo-http', version: '0.3.0' });
+function activeRows(rows) {
+  return (Array.isArray(rows) ? rows : []).filter((row) => row && String(row.deleted || '') !== 'Yes');
+}
+
+function isOpenRequest(row) {
+  const status = String(row && row.current_status || '');
+  return !!status && status !== 'Draft' && !TERMINAL_STATUSES.includes(status);
+}
+
+function countBy(rows, field) {
+  const result = {};
+  for (const row of rows) {
+    const key = String(row && row[field] || '').trim() || 'Unspecified';
+    result[key] = (result[key] || 0) + 1;
+  }
+  return Object.fromEntries(Object.entries(result).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])));
+}
+
+function summarizeRequests(rows) {
+  const visible = activeRows(rows);
+  const drafts = visible.filter((row) => String(row.current_status || '') === 'Draft');
+  const open = visible.filter(isOpenRequest);
+  const terminal = visible.filter((row) => TERMINAL_STATUSES.includes(String(row.current_status || '')));
+  return {
+    definition: 'Open requests exclude Draft and terminal statuses (Closed, Completed, Cancelled, Approved, Rejected).',
+    total_requests: visible.length,
+    open_requests: open.length,
+    drafts: drafts.length,
+    terminal_requests: terminal.length,
+    by_status: countBy(visible, 'current_status'),
+    by_type: countBy(visible, 'request_type'),
+    waiting_on_open_requests: countBy(open, 'waiting_on'),
+  };
+}
+
+function timestampFor(row) {
+  for (const value of [row.last_updated_at, row.submitted_at, row.created_at, row.received_date]) {
+    const ms = Date.parse(String(value || ''));
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
+
+function summarizeBottlenecks(rows, options = {}) {
+  const staleDays = Math.max(1, Math.min(90, Number(options.staleDays || 7)));
+  const now = Number.isFinite(Number(options.now)) ? Number(options.now) : Date.now();
+  const open = activeRows(rows).filter(isOpenRequest);
+  const threshold = now - staleDays * 24 * 60 * 60 * 1000;
+  const stale = open
+    .map((row) => ({ row, timestamp: timestampFor(row) }))
+    .filter((item) => item.timestamp != null && item.timestamp < threshold)
+    .sort((a, b) => a.timestamp - b.timestamp);
+
+  return {
+    stale_after_days: staleDays,
+    open_requests: open.length,
+    returned_for_info: open.filter((row) => String(row.current_status || '') === 'Returned for Info').length,
+    waiting_on_user: open.filter((row) => String(row.waiting_on || '').toLowerCase() === 'user').length,
+    stale_open_requests: stale.length,
+    oldest_stale_requests: stale.slice(0, 10).map((item) => ({
+      ...safeRequest(item.row),
+      days_since_last_activity: Math.floor((now - item.timestamp) / (24 * 60 * 60 * 1000)),
+    })),
+  };
+}
+
+async function rowsForActor(actor) {
+  if (!actor) return [];
+  if (actor.role === 'admin') return activeRows(await store.readCurrent());
+  return activeRows(await store.readOwnedRequests(actor.username, actor.person_id, actor.display_name));
+}
+
+async function canAccessRequest(actor, row) {
+  if (!actor || !row || String(row.deleted || '') === 'Yes') return false;
+  if (actor.role === 'admin') return true;
+  return store.isRequestOwner(row, actor.username, actor.person_id, actor.display_name);
+}
+
+function buildServer(actor = null) {
+  const server = new McpServer({ name: 'comp6708-finance-demo-http', version: '0.4.0' });
 
   server.registerTool(
     'search_finance_knowledge',
@@ -71,51 +144,101 @@ function buildServer() {
     }),
   );
 
-  server.registerTool(
-    'list_demo_requests',
-    {
-      description: 'List safe summary fields for synthetic requests in the course-demo tracker.',
-      inputSchema: {
-        limit: z.number().int().min(1).max(30).optional(),
+  if (actor) {
+    server.registerTool(
+      'list_demo_requests',
+      {
+        description: actor.role === 'admin'
+          ? 'List safe summary fields for synthetic requests visible to Finance Admin.'
+          : 'List safe summary fields for the signed-in requester\'s own synthetic requests.',
+        inputSchema: {
+          limit: z.number().int().min(1).max(30).optional(),
+        },
+        annotations: { readOnlyHint: true },
       },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ limit }) => {
-      const rows = (await store.readCurrent())
-        .map(safeRequest)
-        .filter(Boolean)
-        .slice(0, limit || 20);
-      return asText(rows);
-    },
-  );
+      async ({ limit }) => {
+        const rows = (await rowsForActor(actor)).map(safeRequest).filter(Boolean).slice(0, limit || 20);
+        return asText({ scope: actor.role === 'admin' ? 'admin-visible' : 'requester-owned', results: rows });
+      },
+    );
 
-  server.registerTool(
-    'get_demo_request',
-    {
-      description: 'Read safe summary fields for one synthetic finance request by FR request ID.',
-      inputSchema: { request_id: z.string().regex(/^FR-\d{8}-\d{3}$/i) },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ request_id }) => {
-      const row = safeRequest(await store.getRequestById(String(request_id).toUpperCase()));
-      return asText(row || { error: 'Request not found' });
-    },
-  );
+    server.registerTool(
+      'get_demo_request',
+      {
+        description: 'Read safe summary fields for one accessible synthetic finance request by FR request ID.',
+        inputSchema: { request_id: z.string().regex(/^FR-\d{8}-\d{3}$/i) },
+        annotations: { readOnlyHint: true },
+      },
+      async ({ request_id }) => {
+        const row = await store.getRequestById(String(request_id).toUpperCase());
+        if (!(await canAccessRequest(actor, row))) return asText({ error: 'Request not found or not accessible' });
+        return asText(safeRequest(row));
+      },
+    );
 
-  server.registerTool(
-    'get_demo_request_history',
-    {
-      description: 'Read non-private workflow history for one synthetic finance request.',
-      inputSchema: { request_id: z.string().regex(/^FR-\d{8}-\d{3}$/i) },
-      annotations: { readOnlyHint: true },
-    },
-    async ({ request_id }) => {
-      const history = (await store.getRequestHistory(String(request_id).toUpperCase()))
-        .map(safeHistory)
-        .filter(Boolean);
-      return asText(history);
-    },
-  );
+    server.registerTool(
+      'get_demo_request_history',
+      {
+        description: 'Read non-private workflow history for one accessible synthetic finance request.',
+        inputSchema: { request_id: z.string().regex(/^FR-\d{8}-\d{3}$/i) },
+        annotations: { readOnlyHint: true },
+      },
+      async ({ request_id }) => {
+        const id = String(request_id).toUpperCase();
+        const row = await store.getRequestById(id);
+        if (!(await canAccessRequest(actor, row))) return asText({ error: 'Request not found or not accessible' });
+        const history = (await store.getRequestHistory(id)).map(safeHistory).filter(Boolean);
+        return asText(history);
+      },
+    );
+  }
+
+  if (actor && actor.role === 'admin') {
+    server.registerTool(
+      'get_request_summary',
+      {
+        description: 'Return authoritative aggregate counts for the current synthetic Finance Admin request queue. Prefer this tool for questions such as how many requests are open.',
+        inputSchema: {},
+        annotations: { readOnlyHint: true },
+      },
+      async () => asText(summarizeRequests(await rowsForActor(actor))),
+    );
+
+    server.registerTool(
+      'get_requests_by_status',
+      {
+        description: 'List safe request summaries matching one status. Use status "open" to return all non-Draft, non-terminal requests.',
+        inputSchema: {
+          status: z.string().min(1),
+          limit: z.number().int().min(1).max(30).optional(),
+        },
+        annotations: { readOnlyHint: true },
+      },
+      async ({ status, limit }) => {
+        const wanted = String(status || '').trim().toLowerCase();
+        const rows = await rowsForActor(actor);
+        const matching = (wanted === 'open'
+          ? rows.filter(isOpenRequest)
+          : rows.filter((row) => String(row.current_status || '').trim().toLowerCase() === wanted))
+          .slice(0, limit || 20)
+          .map(safeRequest)
+          .filter(Boolean);
+        return asText({ status: wanted, results: matching });
+      },
+    );
+
+    server.registerTool(
+      'get_request_bottlenecks',
+      {
+        description: 'Return basic operational bottleneck indicators for the synthetic Finance Admin queue: returned-for-info, waiting-on-user and stale open requests.',
+        inputSchema: {
+          stale_days: z.number().int().min(1).max(90).optional(),
+        },
+        annotations: { readOnlyHint: true },
+      },
+      async ({ stale_days }) => asText(summarizeBottlenecks(await rowsForActor(actor), { staleDays: stale_days || 7 })),
+    );
+  }
 
   return server;
 }
@@ -135,9 +258,6 @@ function createDemoMcpHttpServer(options = {}) {
       return;
     }
 
-    // Stateless MCP: each POST gets its own protocol server and transport. Reusing one
-    // stateless transport across initialize + initialized + tool calls causes protocol
-    // lifecycle errors, so follow the SDK's stateless server pattern exactly.
     if (req.method !== 'POST') {
       res.writeHead(405, {
         'Content-Type': 'application/json; charset=utf-8',
@@ -151,7 +271,8 @@ function createDemoMcpHttpServer(options = {}) {
       return;
     }
 
-    const server = buildServer();
+    const actor = verifyActorHeaders(req.headers, token);
+    const server = buildServer(actor);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     await server.connect(transport);
 
@@ -178,4 +299,7 @@ module.exports = {
   safeRequest,
   safeHistory,
   safeEqual,
+  isOpenRequest,
+  summarizeRequests,
+  summarizeBottlenecks,
 };

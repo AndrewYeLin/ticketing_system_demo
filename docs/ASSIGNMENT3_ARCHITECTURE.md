@@ -60,14 +60,20 @@ Two MCP transports are available:
 - `npm run mcp`: standalone stdio server for local MCP clients.
 - `/mcp`: bearer-protected Streamable HTTP MCP endpoint used by the OpenAI Responses API.
 
-The remote endpoint exposes read-only, deliberately projected demo tools:
+The remote endpoint is **role-aware**. Every OpenAI MCP call carries a server-signed actor context derived from the current logged-in session; the browser never constructs or receives that MCP credential. Common read-only tools are:
 
 - `search_finance_knowledge`
 - `list_demo_requests`
 - `get_demo_request`
 - `get_demo_request_history`
 
-The remote tools omit requester identity, supplier banking data, attachment metadata, and private internal-note text. The endpoint requires `MCP_SERVER_TOKEN`; the same token is sent to it by the server-side OpenAI request. It is never exposed to the browser.
+Requester calls are restricted to that requester's own accessible synthetic requests. Finance Admin additionally receives three aggregate insight tools:
+
+- `get_request_summary` — authoritative total/open/draft/terminal counts plus status, type and waiting-on breakdowns.
+- `get_requests_by_status` — safe request summaries for a requested status, including the special `open` view.
+- `get_request_bottlenecks` — returned-for-info, waiting-on-user and stale-open indicators.
+
+`open` is defined server-side as non-Draft and non-terminal work; the LLM does not count a truncated request list itself. The remote projections omit requester identity, supplier banking data, attachment metadata, and private internal-note text. The endpoint requires `MCP_SERVER_TOKEN`; it is never exposed to the browser.
 
 Write tools remain deferred. A future `create_request_draft` or `submit_request` must add explicit user confirmation and authorization checks.
 
@@ -101,8 +107,9 @@ The app is intentionally demo-resilient:
 2. Send a burst: “I need a reimbursement” / “Uber from the airport” / “$46.80” / “and I have two receipts”.
 3. Show WAIT behaviour and explain local burst control plus semantic EOT.
 4. Ask “What documents do I need for reimbursement?” and show the synthetic RAG source labels.
-5. Ask for the status of a synthetic `FR-YYYYMMDD-NNN` request and show **MCP tools used** in the chat panel.
-6. Briefly explain the fallback path and that no fine-tuning is used.
+5. As Finance Admin, ask “How many open requests do we have?” and show `get_request_summary` under **MCP tools used**.
+6. Ask for the status of a synthetic `FR-YYYYMMDD-NNN` request to show record-level MCP access.
+7. Briefly explain the role boundary, fallback path and that no fine-tuning is used.
 
 ## Evaluation ideas
 

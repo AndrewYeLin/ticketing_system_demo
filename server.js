@@ -924,7 +924,7 @@ async function handleApi(req, res, parsed) {
     const hits = searchFinanceKnowledge(query, { limit: 4 });
     if (openaiAssistant.configured()) {
       try {
-        const generated = await openaiAssistant.generateGroundedAnswer({ messages, evidence: hits });
+        const generated = await openaiAssistant.generateGroundedAnswer({ messages, evidence: hits, actor: actorSnapshot(req) });
         if (generated) {
           return sendJson(res, 200, {
             ...generated,

@@ -9,7 +9,7 @@ Academic prototype for COMP6708. This repository is a sanitised course-demo copy
 - File attachments
 - Local authentication and role-based access
 - CSV storage for a low-cost, single-instance course demo
-- REST APIs plus a standalone MCP read-only tool server
+- REST APIs plus role-aware read-only MCP tools and Admin queue insights
 - Logged-in Course Assistant with OpenAI semantic turn-taking, grounded RAG, remote MCP tools, and deterministic fallback
 
 ## Local run
@@ -41,7 +41,7 @@ The repository now includes:
 1. **Turn-taking** — a deterministic burst/maximum-wait baseline is augmented by OpenAI semantic end-of-turn classification.
 2. **RAG** — `lib/knowledgeBase.js` retrieves evidence from synthetic markdown; the chat model may synthesise an answer only from that evidence.
 3. **Course Assistant UI** — a logged-in floating chat panel shows WAIT/RESPOND behaviour, RAG sources, and MCP tools used.
-4. **MCP** — `/mcp` is a bearer-protected Streamable HTTP MCP endpoint for read-only synthetic tracker tools; `npm run mcp` remains available for stdio clients.
+4. **MCP** — `/mcp` is a bearer-protected, server-signed role-aware Streamable HTTP endpoint. Requesters see only their accessible tickets; Admin also gets server-computed queue summary, status-filter and bottleneck insight tools. `npm run mcp` remains available for stdio clients.
 5. **Fallback** — if OpenAI is unavailable, the original deterministic turn-taking and response paths still work.
 
 See `docs/ASSIGNMENT3_ARCHITECTURE.md` for architecture, demo flow, environment variables, and safety boundaries.

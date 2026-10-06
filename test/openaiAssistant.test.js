@@ -7,6 +7,7 @@ const {
   mcpToolConfig,
   createOpenAIAdapter,
 } = require('../lib/openaiAssistant');
+const { verifyActorHeaders } = require('../lib/mcpActorAuth');
 
 test('turn decision parser accepts only WAIT or RESPOND semantics', () => {
   assert.equal(parseTurnDecision('WAIT'), 'WAIT');
@@ -15,16 +16,37 @@ test('turn decision parser accepts only WAIT or RESPOND semantics', () => {
   assert.equal(parseTurnDecision('maybe'), '');
 });
 
-test('MCP tool config is created only when URL and token exist', () => {
+test('MCP tool config is role-aware and signs actor context', () => {
   assert.equal(mcpToolConfig({ APP_BASE_URL: '', MCP_SERVER_TOKEN: 'x' }), null);
-  const config = mcpToolConfig({
+  const env = {
     APP_BASE_URL: 'https://demo.example/',
     MCP_SERVER_TOKEN: 'secret',
+  };
+
+  const anonymous = mcpToolConfig(env);
+  assert.deepEqual(anonymous.allowed_tools, ['search_finance_knowledge']);
+  assert.equal(anonymous.headers.Authorization, 'Bearer secret');
+
+  const requester = mcpToolConfig(env, {
+    username: 'requester@polyu.edu.hk',
+    role: 'requester',
+    person_id: 'PER-002',
+    display_name: 'Demo Requester',
   });
-  assert.equal(config.type, 'mcp');
-  assert.equal(config.server_url, 'https://demo.example/mcp');
-  assert.equal(config.headers.Authorization, 'Bearer secret');
-  assert.equal(config.require_approval, 'never');
+  assert.ok(requester.allowed_tools.includes('get_demo_request'));
+  assert.equal(requester.allowed_tools.includes('get_request_summary'), false);
+  assert.equal(verifyActorHeaders(requester.headers, 'secret').role, 'requester');
+
+  const admin = mcpToolConfig(env, {
+    username: 'admin@polyu.edu.hk',
+    role: 'admin',
+    person_id: 'PER-001',
+    display_name: 'Demo Administrator',
+  });
+  assert.ok(admin.allowed_tools.includes('get_request_summary'));
+  assert.ok(admin.allowed_tools.includes('get_request_bottlenecks'));
+  assert.equal(verifyActorHeaders(admin.headers, 'secret').role, 'admin');
+  assert.equal(admin.require_approval, 'never');
 });
 
 test('semantic turn classification uses OpenAI response after burst gate', async () => {
@@ -46,8 +68,8 @@ test('semantic turn classification uses OpenAI response after burst gate', async
     },
   });
   const result = await adapter.classifyTurn(
-    { messages: [{ role: 'user', text: 'Uber from the airport' }], elapsed_ms: 1500 },
-    { decision: 'RESPOND', reason: 'idle-and-semantically-complete', idle_ms: 1200, max_wait_ms: 3600 },
+    { messages: [{ role: 'user', text: 'Uber from the airport' }], elapsed_ms: 3000 },
+    { decision: 'RESPOND', reason: 'idle-and-semantically-complete', idle_ms: 2500, max_wait_ms: 3600 },
   );
   assert.equal(result.decision, 'WAIT');
   assert.equal(result.provider, 'openai');
@@ -65,13 +87,13 @@ test('burst gate avoids an OpenAI call for a fresh ordinary fragment', async () 
   });
   const result = await adapter.classifyTurn(
     { messages: [{ role: 'user', text: 'I need a reimbursement' }], elapsed_ms: 100 },
-    { decision: 'WAIT', reason: 'message-burst-window', idle_ms: 1200, max_wait_ms: 3600 },
+    { decision: 'WAIT', reason: 'message-burst-window', idle_ms: 2500, max_wait_ms: 3600 },
   );
   assert.equal(result.decision, 'WAIT');
   assert.equal(calls, 0);
 });
 
-test('grounded answer sends RAG evidence and remote MCP config', async () => {
+test('grounded admin answer sends RAG evidence and role-aware MCP config', async () => {
   let request;
   const adapter = createOpenAIAdapter({
     client: {
@@ -79,8 +101,8 @@ test('grounded answer sends RAG evidence and remote MCP config', async () => {
         create: async (value) => {
           request = value;
           return {
-            output_text: 'Synthetic answer.',
-            output: [{ type: 'mcp_call', name: 'get_demo_request' }],
+            output_text: 'There are 3 open requests.',
+            output: [{ type: 'mcp_call', name: 'get_request_summary' }],
           };
         },
       },
@@ -94,12 +116,21 @@ test('grounded answer sends RAG evidence and remote MCP config', async () => {
     },
   });
   const result = await adapter.generateGroundedAnswer({
-    messages: [{ role: 'user', text: 'What is the status of FR-20261005-001?' }],
+    messages: [{ role: 'user', text: 'How many requests are open?' }],
     evidence: [{ title: 'Status Guide', section: 'Status questions', text: 'Use the live tracker.' }],
+    actor: {
+      username: 'admin@polyu.edu.hk',
+      role: 'admin',
+      person_id: 'PER-001',
+      display_name: 'Demo Administrator',
+    },
   });
   assert.equal(result.mode, 'openai-rag-mcp');
-  assert.deepEqual(result.tools_used, ['get_demo_request']);
+  assert.deepEqual(result.tools_used, ['get_request_summary']);
   assert.equal(request.model, 'test-chat-model');
   assert.equal(request.tools[0].type, 'mcp');
+  assert.ok(request.tools[0].allowed_tools.includes('get_request_summary'));
+  assert.equal(verifyActorHeaders(request.tools[0].headers, 'mcp-secret').role, 'admin');
   assert.match(request.input, /Status Guide/);
+  assert.match(request.instructions, /Finance Admin/);
 });
