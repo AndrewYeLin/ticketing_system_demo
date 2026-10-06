@@ -35,7 +35,7 @@ The design separates three concerns:
 
 ## Turn-taking
 
-`/api/assistant/turn` first computes the original deterministic baseline. Hard guardrails remain local: a forced response and the maximum-wait limit never depend on the model. Fresh ordinary fragments stay inside the local message-burst window to reduce latency and API cost.
+`/api/assistant/turn` first computes the original deterministic baseline. Hard guardrails remain local: a forced response and the maximum-wait limit never depend on the model. Fresh ordinary fragments stay inside a **2.5-second local message-burst window** to make multi-message turns visible in the live demo while reducing premature replies and unnecessary model calls.
 
 After the burst window, when OpenAI is configured, `gpt-6-luna` performs semantic end-of-turn classification and returns only `WAIT` or `RESPOND`. If the API is unavailable, the deterministic baseline is returned instead.
 

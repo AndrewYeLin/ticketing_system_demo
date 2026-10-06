@@ -9,6 +9,13 @@ test('waits during the immediate message-burst window', () => {
   assert.equal(result.decision, 'WAIT');
 });
 
+test('keeps an ordinary message inside the 2.5 second demo burst window', () => {
+  const result = decideTurn({ messages: [{ role: 'user', text: 'I need a reimbursement for an Uber from the airport' }], elapsed_ms: 1500 });
+  assert.equal(result.decision, 'WAIT');
+  assert.equal(result.reason, 'message-burst-window');
+  assert.equal(result.idle_ms, 2500);
+});
+
 test('responds immediately to a direct question', () => {
   const result = decideTurn({ messages: [{ role: 'user', text: 'What documents do I need?' }], elapsed_ms: 50 });
   assert.equal(result.decision, 'RESPOND');
