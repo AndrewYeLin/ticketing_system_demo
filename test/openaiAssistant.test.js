@@ -53,6 +53,8 @@ test('semantic turn classification uses OpenAI response after burst gate', async
   assert.equal(result.provider, 'openai');
   assert.equal(result.model, 'test-turn-model');
   assert.equal(calls.length, 1);
+  assert.equal(calls[0].reasoning.effort, 'none');
+  assert.equal(calls[0].max_output_tokens, 32);
 });
 
 test('burst gate avoids an OpenAI call for a fresh ordinary fragment', async () => {
