@@ -30,7 +30,7 @@ Required variables:
 - DEMO_ADMIN_PASSWORD
 - DEMO_MODE=true
 - STORAGE=csv
-- REGISTRATION_ALLOWED_DOMAINS=connect.polyu.hk,polyu.edu.hk
+- REGISTRATION_ALLOWED_DOMAINS=connect.polyu.hk,polyu.edu.hk\n- DEMO_SEED_REQUESTS=true (optional; idempotently adds seven synthetic requests for Admin Insight demonstrations)
 
 After Railway creates the public domain, optionally set APP_BASE_URL to that HTTPS URL.
 
