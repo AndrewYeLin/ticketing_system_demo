@@ -3,15 +3,10 @@
 const repo = require('../lib/repoCsv');
 const { CURRENT_COLUMNS } = require('../lib/constants');
 
-const SEED_IDS = [
-  'FR-20261024-951',
-  'FR-20261024-952',
-  'FR-20261024-953',
-  'FR-20261024-954',
-  'FR-20261024-955',
-  'FR-20261024-956',
-  'FR-20261024-957',
-];
+const SEED_IDS = Array.from(
+  { length: 40 },
+  (_, index) => `FR-20261024-${String(951 + index).padStart(3, '0')}`,
+);
 
 function emptyRow() {
   return Object.fromEntries(CURRENT_COLUMNS.map((column) => [column, '']));
@@ -36,8 +31,97 @@ function requestRow(overrides) {
   };
 }
 
+function daysAgo(days, hour = 2) {
+  return new Date(Date.UTC(2026, 9, 24 - days, hour, 0, 0)).toISOString();
+}
+
+function dateOnly(iso) {
+  return String(iso).slice(0, 10);
+}
+
+function generatedSeedRow(id, index) {
+  const profiles = [
+    ['Reimbursement', 'Reimbursement', 'Submitted', 'Finance'],
+    ['Reimbursement', 'Reimbursement', 'Returned for Info', 'User'],
+    ['Reimbursement', 'Reimbursement', 'In Progress', 'Finance'],
+    ['Procurement', 'Purchase / PO request', 'Submit to Admin', 'Finance'],
+    ['Procurement', 'Purchase / PO request', 'Submit to Approver', 'Approver'],
+    ['Procurement', 'Purchase / PO request', 'Requisition submitted', 'Finance'],
+    ['Travel', 'Domestic', 'Submitted', 'Finance'],
+    ['Travel', 'International', 'In Progress', 'Finance'],
+    ['Travel', 'Domestic', 'Processed in External System', 'External System'],
+    ['Travel Allowance', 'Meals/incidentals', 'Submitted', 'Finance'],
+    ['Travel Allowance', 'Meals/incidentals', 'Returned for Info', 'User'],
+    ['Travel Allowance', 'Meals/incidentals', 'In Progress', 'Finance'],
+    ['Reimbursement', 'Reimbursement', 'Completed', ''],
+    ['Procurement', 'Purchase / PO request', 'Complete', ''],
+    ['Travel', 'Domestic', 'Completed', ''],
+    ['Travel', 'International', 'Draft', ''],
+    ['Procurement', 'Purchase / PO request', 'Cancelled', ''],
+    ['Reimbursement', 'Reimbursement', 'Updated and Resubmitted', 'Finance'],
+  ];
+  const [requestType, subType, status, waitingOn] = profiles[index % profiles.length];
+  const ageDays = 1 + ((index * 3) % 25);
+  const updatedAt = daysAgo(ageDays, 2 + (index % 6));
+  const createdAt = daysAgo(Math.min(ageDays + 2, 27), 1 + (index % 5));
+  const amount = (75 + (index * 37.35)).toFixed(2);
+  const requester = index % 3 === 1
+    ? { requester_person_id: 'PER-015', requester_name: 'Demo Requester Two' }
+    : { requester_person_id: 'PER-002', requester_name: 'Demo Requester One' };
+  const isTerminal = ['Complete', 'Completed', 'Cancelled'].includes(status);
+  const isDraft = status === 'Draft';
+  const row = requestRow({
+    request_id: id,
+    request_type: requestType,
+    sub_type: subType,
+    ...requester,
+    amount,
+    activity_code: ['3203', '3206', '3234', '3270'][index % 4],
+    short_description: `Synthetic demo request ${index + 8}: ${requestType}`,
+    current_status: status,
+    waiting_on: waitingOn,
+    next_action: isTerminal
+      ? ''
+      : isDraft
+        ? 'Requester to complete draft'
+        : waitingOn === 'User'
+          ? 'Requester to provide clarification'
+          : waitingOn === 'Approver'
+            ? 'Approver review'
+            : waitingOn === 'External System'
+              ? 'Await external system processing'
+              : 'Finance review',
+    created_at: createdAt,
+    last_updated_at: updatedAt,
+    submitted_at: isDraft ? '' : createdAt,
+    returned_for_info_at: status === 'Returned for Info' ? updatedAt : '',
+    completed_at: ['Complete', 'Completed'].includes(status) ? updatedAt : '',
+    completed_date: ['Complete', 'Completed'].includes(status) ? dateOnly(updatedAt) : '',
+  });
+
+  if (requestType === 'Procurement') {
+    const numeric = Number(amount);
+    row.supplier_type = 'Existing Supplier';
+    row.supplier_name = `Synthetic Supplier ${String((index % 8) + 1).padStart(2, '0')}`;
+    row.spending_approver = 'Demo Approver One';
+    row.amount_ex_gst = (numeric / 1.1).toFixed(2);
+    row.gst_amount = (numeric - Number(row.amount_ex_gst)).toFixed(2);
+    row.amount_inc_gst = amount;
+  }
+
+  if (requestType === 'Travel' || requestType === 'Travel Allowance') {
+    row.beneficiary_person_id = requester.requester_person_id;
+    row.beneficiary_name = requester.requester_name;
+    row.destination = ['Melbourne', 'Brisbane', 'Perth', 'Adelaide', 'Darwin'][index % 5];
+    row.travel_start_date = `2026-11-${String(2 + (index % 20)).padStart(2, '0')}`;
+    row.travel_end_date = `2026-11-${String(4 + (index % 20)).padStart(2, '0')}`;
+  }
+
+  return row;
+}
+
 function buildSeedRows() {
-  return [
+  const showcaseRows = [
     requestRow({
       request_id: SEED_IDS[0],
       request_type: 'Reimbursement',
@@ -158,6 +242,11 @@ function buildSeedRows() {
       created_at: '2026-10-24T01:00:00.000Z',
       last_updated_at: '2026-10-24T01:00:00.000Z',
     }),
+  ];
+
+  return [
+    ...showcaseRows,
+    ...SEED_IDS.slice(showcaseRows.length).map((id, index) => generatedSeedRow(id, index)),
   ];
 }
 
